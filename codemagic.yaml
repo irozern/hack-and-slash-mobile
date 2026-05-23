@@ -1,7 +1,7 @@
 workflows:
   android-build:
     name: Android Build
-    instance_type: linux_x2
+    instance_type: linux
     max_build_duration: 60
     
     environment:
@@ -49,7 +49,7 @@ workflows:
 
   test:
     name: Run Tests
-    instance_type: linux_x2
+    instance_type: linux
     max_build_duration: 30
     
     scripts:
