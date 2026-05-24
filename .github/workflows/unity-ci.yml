@@ -1,8 +1,14 @@
 name: Unity CI
 
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+
 'on':
   push:
     branches: [ main ]
+    tags: [ '*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
