@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show runner info
+        run: uname -a
+      - name: List repository root
+        run: ls -la
+      - name: Check dotnet
+        run: |
+          if command -v dotnet >/dev/null 2>&1; then
+            dotnet --version
+          else
+            echo "dotnet not installed"
+          fi
