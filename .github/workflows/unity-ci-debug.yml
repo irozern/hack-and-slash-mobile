@@ -1,0 +1,12 @@
+name: Unity CI Debug
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo test
+        run: echo "Unity CI debug workflow is valid"
