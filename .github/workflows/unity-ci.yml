@@ -5,7 +5,7 @@ permissions:
   actions: read
   id-token: write
 
-on:
+'on':
   push:
     branches: [ main ]
     tags: [ '*' ]
@@ -30,13 +30,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Activate Unity license (if provided)
+      - name: Decode Unity license file (if provided)
+        if: secrets.UNITY_LICENSE != ''
+        run: |
+          echo "${{ secrets.UNITY_LICENSE }}" | base64 --decode > unity.ulf
+          chmod 600 unity.ulf || true
+      - name: Activate Unity license from license file
         if: secrets.UNITY_LICENSE != ''
         uses: game-ci/unity-activate@v2
         with:
-          unityLicenseBase64: ${{ secrets.UNITY_LICENSE }}
-          # optional: set unityVersion if needed
           unityVersion: ${{ env.UNITY_VERSION }}
+        env:
+          UNITY_LICENSE_FILE: ${{ github.workspace }}/unity.ulf
+      - name: Activate Unity license from credentials
+        if: secrets.UNITY_LICENSE == '' && secrets.UNITY_EMAIL != '' && secrets.UNITY_PASSWORD != '' && secrets.UNITY_SERIAL != ''
+        uses: game-ci/unity-activate@v2
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+        env:
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
       - name: Run EditMode + PlayMode tests
         uses: game-ci/unity-test-runner@v2
         with:
@@ -195,14 +209,13 @@ jobs:
       - name: License info
         run: |
           echo "If Unity fails to install, set a Unity license and adjust UNITY_VERSION."
-          echo "Add a `UNITY_LICENSE` secret (Base64 license) or use GitHub-hosted Unity setup where applicable."
+          echo "Add a `UNITY_LICENSE` secret (Base64 license) or provide UNITY_EMAIL, UNITY_PASSWORD, and UNITY_SERIAL."
           echo "Required secrets for Android: ANDROID_KEYSTORE (Base64), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD"
           echo "Required secrets for iOS: IOS_SIGNING_CERT_BASE64, IOS_SIGNING_CERT_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64, IOS_APPLE_TEAM_ID"
-      - name: Deactivate Unity license (if activated)
-        if: secrets.UNITY_LICENSE != ''
-        uses: game-ci/unity-deactivate@v2
-        with:
-          unityVersion: ${{ env.UNITY_VERSION }}
+      - name: Cleanup Unity license file
+        if: always()
+        run: |
+          rm -f unity.ulf || true
 
   publish-release:
     name: Publish GitHub Release (APKs)
