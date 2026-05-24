@@ -30,16 +30,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Generate temporary debug keystore (if no secret)
-        if: secrets.ANDROID_KEYSTORE == ''
-        run: |
-          echo "No Android keystore secret found — generating temporary debug keystore..."
-          keytool -genkeypair -v -keystore keystore.jks -alias testkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android -dname "CN=Debug, O=Local, C=US"
-          echo "ANDROID_KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
-          echo "ANDROID_KEY_ALIAS=testkey" >> $GITHUB_ENV
-          echo "ANDROID_KEY_PASSWORD=android" >> $GITHUB_ENV
-          ls -la keystore.jks || true
       - name: Activate Unity license (if provided)
         if: secrets.UNITY_LICENSE != ''
         uses: game-ci/unity-activate@v2
@@ -84,6 +74,7 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+
       - name: Decode Android keystore
         if: secrets.ANDROID_KEYSTORE != ''
         run: |
@@ -91,21 +82,42 @@ jobs:
           echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > keystore.jks
           chmod 600 keystore.jks || true
           ls -la keystore.jks
-      - name: Build Android with game-ci Unity Builder
+
+      - name: Generate temporary debug keystore
+        if: secrets.ANDROID_KEYSTORE == ''
+        run: |
+          echo "No Android keystore secret found — generating temporary debug keystore..."
+          keytool -genkeypair -v -keystore keystore.jks -alias testkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android -dname "CN=Debug, O=Local, C=US"
+          ls -la keystore.jks
+
+      - name: Build Android with game-ci Unity Builder (signed)
+        if: secrets.ANDROID_KEYSTORE != ''
         uses: game-ci/unity-builder@v2
         with:
           unityVersion: ${{ env.UNITY_VERSION }}
           targetPlatform: Android
           buildName: GameBuild-Android
-          # Android signing - provide these secrets in repository settings
           androidKeystoreName: keystore.jks
           androidKeystoreBase64: ${{ secrets.ANDROID_KEYSTORE }}
           androidKeystorePass: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           androidKeyaliasName: ${{ secrets.ANDROID_KEY_ALIAS }}
           androidKeyaliasPass: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          # Prefer APK output; builder may still produce AAB depending on project settings
           androidBuildType: apk
-          # Use our custom build method which forces APK output
+          buildMethod: BuildCommand.BuildAndroid
+
+      - name: Build Android with game-ci Unity Builder (debug)
+        if: secrets.ANDROID_KEYSTORE == ''
+        uses: game-ci/unity-builder@v2
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          targetPlatform: Android
+          buildName: GameBuild-Android
+          androidKeystoreName: keystore.jks
+          androidKeystorePass: android
+          androidKeyaliasName: testkey
+          androidKeyaliasPass: android
+          androidBuildType: apk
           buildMethod: BuildCommand.BuildAndroid
 
       - name: Upload Android build artifact
@@ -134,6 +146,7 @@ jobs:
     name: Build iOS
     runs-on: macos-latest
     needs: test
+    if: secrets.IOS_SIGNING_CERT_BASE64 != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != ''
     steps:
       - uses: actions/checkout@v4
       - name: Decode iOS signing files
