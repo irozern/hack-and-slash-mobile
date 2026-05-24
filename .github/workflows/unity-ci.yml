@@ -1,0 +1,246 @@
+name: Unity CI
+
+'on':
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Set true to publish a GitHub Release after successful build'
+        required: false
+        default: 'false'
+      release_tag:
+        description: 'Tag name to use for the release (optional)'
+        required: false
+
+env:
+  UNITY_VERSION: 2021.3.18f1
+
+jobs:
+  test:
+    name: Run Unity tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate temporary debug keystore (if no secret)
+        if: secrets.ANDROID_KEYSTORE == ''
+        run: |
+          echo "No Android keystore secret found — generating temporary debug keystore..."
+          keytool -genkeypair -v -keystore keystore.jks -alias testkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android -dname "CN=Debug, O=Local, C=US"
+          echo "ANDROID_KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
+          echo "ANDROID_KEY_ALIAS=testkey" >> $GITHUB_ENV
+          echo "ANDROID_KEY_PASSWORD=android" >> $GITHUB_ENV
+          ls -la keystore.jks || true
+      - name: Activate Unity license (if provided)
+        if: secrets.UNITY_LICENSE != ''
+        uses: game-ci/unity-activate@v2
+        with:
+          unityLicenseBase64: ${{ secrets.UNITY_LICENSE }}
+          # optional: set unityVersion if needed
+          unityVersion: ${{ env.UNITY_VERSION }}
+      - name: Run EditMode + PlayMode tests
+        uses: game-ci/unity-test-runner@v2
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          # Set to 'editmode', 'playmode' or 'all'
+          testMode: all
+
+  build-windows:
+    name: Build Windows standalone
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Windows with game-ci Unity Builder
+        uses: game-ci/unity-builder@v2
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          targetPlatform: StandaloneWindows64
+          buildName: GameBuild-Windows
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: GameBuild-Windows
+          path: build/**
+      - name: Cleanup Windows signing files
+        if: always()
+        run: |
+          rm -f keystore.jks signing.p12 profile.mobileprovision || true
+          echo "Cleaned possible signing files"
+
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode Android keystore
+        if: secrets.ANDROID_KEYSTORE != ''
+        run: |
+          echo "Decoding Android keystore from secret..."
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > keystore.jks
+          chmod 600 keystore.jks || true
+          ls -la keystore.jks
+      - name: Build Android with game-ci Unity Builder
+        uses: game-ci/unity-builder@v2
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          targetPlatform: Android
+          buildName: GameBuild-Android
+          # Android signing - provide these secrets in repository settings
+          androidKeystoreName: keystore.jks
+          androidKeystoreBase64: ${{ secrets.ANDROID_KEYSTORE }}
+          androidKeystorePass: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          androidKeyaliasName: ${{ secrets.ANDROID_KEY_ALIAS }}
+          androidKeyaliasPass: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Prefer APK output; builder may still produce AAB depending on project settings
+          androidBuildType: apk
+          # Use our custom build method which forces APK output
+          buildMethod: BuildCommand.BuildAndroid
+
+      - name: Upload Android build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: GameBuild-Android
+          path: build/**
+      - name: Collect APKs
+        run: |
+          mkdir -p build/apk
+          find . -type f -name '*.apk' -exec cp {} build/apk/ \;
+          echo "Found APKs:"; ls -la build/apk || true
+      - name: Upload APKs
+        uses: actions/upload-artifact@v3
+        with:
+          name: APKs
+          path: build/apk/**
+      - name: Cleanup Android signing files
+        if: always()
+        run: |
+          shred -u keystore.jks 2>/dev/null || rm -f keystore.jks || true
+          unset ANDROID_KEYSTORE ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD || true
+          echo "Cleaned Android signing files"
+
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode iOS signing files
+        if: secrets.IOS_SIGNING_CERT_BASE64 != '' || secrets.IOS_PROVISIONING_PROFILE_BASE64 != ''
+        run: |
+          echo "Decoding iOS signing certificate and provisioning profile..."
+          if [ -n "${{ secrets.IOS_SIGNING_CERT_BASE64 }}" ]; then
+            echo "${{ secrets.IOS_SIGNING_CERT_BASE64 }}" | base64 --decode > signing.p12
+            chmod 600 signing.p12 || true
+          fi
+          if [ -n "${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}" ]; then
+            echo "${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}" | base64 --decode > profile.mobileprovision
+            chmod 644 profile.mobileprovision || true
+          fi
+          ls -la signing.p12 profile.mobileprovision || true
+      - name: Build iOS with game-ci Unity Builder
+        uses: game-ci/unity-builder@v2
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          targetPlatform: iOS
+          buildName: GameBuild-iOS
+          # iOS signing - provide these secrets in repository settings
+          signingCertificateBase64: ${{ secrets.IOS_SIGNING_CERT_BASE64 }}
+          signingCertificatePassword: ${{ secrets.IOS_SIGNING_CERT_PASSWORD }}
+          provisioningProfileBase64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          appleTeamId: ${{ secrets.IOS_APPLE_TEAM_ID }}
+
+      - name: Upload iOS build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: GameBuild-iOS
+          path: build/**
+      - name: Cleanup iOS signing files
+        if: always()
+        run: |
+          shred -u signing.p12 2>/dev/null || rm -f signing.p12 || true
+          rm -f profile.mobileprovision || true
+          unset IOS_SIGNING_CERT_BASE64 IOS_SIGNING_CERT_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_APPLE_TEAM_ID || true
+          echo "Cleaned iOS signing files"
+
+  license-check:
+    name: Unity license reminder
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: License info
+        run: |
+          echo "If Unity fails to install, set a Unity license and adjust UNITY_VERSION."
+          echo "Add a `UNITY_LICENSE` secret (Base64 license) or use GitHub-hosted Unity setup where applicable."
+          echo "Required secrets for Android: ANDROID_KEYSTORE (Base64), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD"
+          echo "Required secrets for iOS: IOS_SIGNING_CERT_BASE64, IOS_SIGNING_CERT_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64, IOS_APPLE_TEAM_ID"
+      - name: Deactivate Unity license (if activated)
+        if: secrets.UNITY_LICENSE != ''
+        uses: game-ci/unity-deactivate@v2
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+
+  publish-release:
+    name: Publish GitHub Release (APKs)
+    runs-on: ubuntu-latest
+    needs: build-android
+    if: (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true') || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download APKs artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: APKs
+          path: ./artifacts/apks
+
+      - name: Determine release tag
+        run: |
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            echo "RELEASE_TAG=${{ github.event.inputs.release_tag }}" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            tag=${{ github.ref }}
+            tag=${tag#refs/tags/}
+            echo "RELEASE_TAG=$tag" >> $GITHUB_ENV
+          else
+            echo "RELEASE_TAG=v${{ github.run_number }}" >> $GITHUB_ENV
+          fi
+
+      - name: Create GitHub Release and upload APKs
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+          files: ./artifacts/apks/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set release email recipient
+        run: |
+          if [ -n "${{ secrets.RELEASE_EMAIL }}" ]; then
+            echo "RELEASE_EMAIL=${{ secrets.RELEASE_EMAIL }}" >> $GITHUB_ENV
+          else
+            echo "RELEASE_EMAIL=karatpol@gmail.com" >> $GITHUB_ENV
+          fi
+
+      - name: Send release email
+        if: secrets.SMTP_HOST != '' && secrets.SMTP_USERNAME != '' && secrets.SMTP_PASSWORD != '' && secrets.EMAIL_FROM != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "APK released: ${{ env.RELEASE_TAG }}"
+          body: |
+            Release published: https://github.com/${{ github.repository }}/releases/tag/${{ env.RELEASE_TAG }}
+            APK artifact is attached to the release.
+          from: ${{ secrets.EMAIL_FROM }}
+          to: ${{ env.RELEASE_EMAIL }}
+          secure: true
+
+      - name: Release published note
+        run: |
+          echo "Release published. Email sent to ${{ env.RELEASE_EMAIL }} if SMTP was configured."
