@@ -1,0 +1,26 @@
+name: Unity CI Test Job Debug
+
+env:
+  UNITY_VERSION: 2021.3.18f1
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Unity tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Activate Unity license (if provided)
+        if: secrets.UNITY_LICENSE != ''
+        uses: game-ci/unity-activate@v2
+        with:
+          unityLicenseBase64: ${{ secrets.UNITY_LICENSE }}
+          unityVersion: ${{ env.UNITY_VERSION }}
+      - name: Run EditMode + PlayMode tests
+        uses: game-ci/unity-test-runner@v2
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          testMode: all
